@@ -2,10 +2,11 @@ package database
 
 import (
 	"database/sql"
-	"errors"
+	"encoding/json"
 	"fmt"
 
 	"github.com/d34ckgler/sync-product-image/model"
+	"github.com/supabase-community/supabase-go"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -18,10 +19,11 @@ type Supabase struct {
 	Dbname   string
 	DB       *gorm.DB
 	sql      *sql.DB
+	Client   *supabase.Client
 }
 
 type Ecommerce interface {
-	Open()
+	Open(client *supabase.Client)
 	InitPool() (*gorm.DB, error)
 	Connect()
 	GetProducts() ([]model.Product, error)
@@ -32,12 +34,16 @@ type Ecommerce interface {
 	Close() error
 }
 
+func (ecm *Supabase) Open(client *supabase.Client) {
+	ecm.Client = client
+}
+
 func (ecm *Supabase) InitPool() (*gorm.DB, error) {
 	// dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=disable TimeZone=America/Caracas application_name=ecommerce", ecm.Host, ecm.User, ecm.Password, ecm.Dbname, ecm.Port)
 	// dsn := "postgresql://postgres.gpacszhbwbrdjyyxlzdr:6Dv0YvCiGBJmNYT3@aws-0-us-west-1.pooler.supabase.com:5432/postgres"
 
-	// dsn := "postgresql://postgres.gpacszhbwbrdjyyxlzdr:6Dv0YvCiGBJmNYT3@aws-0-us-west-1.pooler.supabase.com:5432/postgres"
-	dsn := "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+	dsn := "postgresql://postgres.bmjqebmyyeybsyzwirkd:6Dv0YvCiGBJmNYT3@aws-0-us-east-1.pooler.supabase.com:5432/postgres"
+	// dsn := "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
 
 	// sqlDB, err := sql.Open("pgx", dsn)
 	// if err != nil {
@@ -83,13 +89,37 @@ func (ecm *Supabase) Connect() {
 }
 
 func (ecm *Supabase) GetProducts() (products []model.Product, err error) {
-	ecm.DB.Find(&products)
+	fmt.Println("Attempting to load paginated products from Supabase...")
+	offset := 0
 
-	if len(products) <= 0 {
-		return nil, errors.New("not found products")
+	for {
+		var tempProducs []model.Product
+		data, _, err := ecm.Client.From("product").
+			Select("*", "", false).
+			Range(offset, offset+1000-1, "").
+			Execute()
+		if err != nil {
+			return nil, err
+		}
+
+		err = json.Unmarshal(data, &tempProducs)
+		if err != nil {
+			return nil, fmt.Errorf("error al deserializar los datos JSON a productos: %w", err)
+		}
+
+		products = append(products, tempProducs...)
+		fmt.Println("Loaded", len(tempProducs), "products from Supabase.")
+
+		if len(tempProducs) == 0 {
+			break
+		}
+
+		offset += 1000
 	}
 
-	return
+	fmt.Printf("Loaded %d products from Supabase.\n", len(products))
+
+	return products, nil
 }
 
 func (ecm *Supabase) Desallocate() {
@@ -106,7 +136,8 @@ func (ecm *Supabase) GetProduct(id int) (product model.Product) {
 }
 
 func (ecm *Supabase) GetMedia(slug string) (media model.Media) {
-	ecm.DB.First(&media, "slug = ?", slug)
+	// ecm.DB.First(&media, "slug = ?", slug)
+	ecm.Client.From("media").Select("*", "", false).Eq("slug", slug).Single().ExecuteTo(&media)
 
 	return
 }

@@ -2,14 +2,12 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"image/jpeg"
 	"io"
 	"io/ioutil"
 	"log"
 	"mime/multipart"
-	"net/http"
 	"os"
 	"strconv"
 
@@ -17,10 +15,12 @@ import (
 	"github.com/d34ckgler/sync-product-image/database"
 	"github.com/d34ckgler/sync-product-image/model"
 	"github.com/joho/godotenv"
+	"github.com/supabase-community/supabase-go"
 )
 
-var supabase *database.Supabase
-var MONGODB_URI, MONGODB_DATABASE, TOKEN, API_BASE_URL, PREFIX_AUTHORIZATION, API_ADMIN_USER, API_ADMIN_PASSWORD, ENDPOINT_USER_LOGIN, ENDPOINT_MEDIA, WATCH_FILE_PATH, OUTPUT_FILE_PATH string
+var sb *database.Supabase
+var client *supabase.Client
+var SUPABASE_URL, SUPABASE_KEY, API_BASE_URL, ENDPOINT_MEDIA, WATCH_FILE_PATH, OUTPUT_FILE_PATH string
 var err error
 
 func init() {
@@ -30,58 +30,21 @@ func init() {
 	}
 
 	// Initialize environment variables values
+	SUPABASE_URL = os.Getenv("SUPABASE_URL")
+	SUPABASE_KEY = os.Getenv("SUPABASE_KEY")
 	API_BASE_URL = os.Getenv("API_BASE_URL")
-	PREFIX_AUTHORIZATION = os.Getenv("PREFIX_AUTHORIZATION")
 	ENDPOINT_MEDIA = os.Getenv("ENDPOINT_MEDIA")
-	ENDPOINT_USER_LOGIN = os.Getenv("ENDPOINT_USER_LOGIN")
-	API_ADMIN_USER = os.Getenv("API_ADMIN_USER")
-	API_ADMIN_PASSWORD = os.Getenv("API_ADMIN_PASSWORD")
-	MONGODB_URI = os.Getenv("MONGODB_URI")
-	MONGODB_DATABASE = os.Getenv("MONGODB_DATABASE")
 	WATCH_FILE_PATH = os.Getenv("WATCH_FILE_PATH")
 	OUTPUT_FILE_PATH = os.Getenv("OUTPUT_FILE_PATH")
-	TOKEN = os.Getenv("TOKEN")
+	// TOKEN = os.Getenv("TOKEN")
 
-	// Supabase String Connection
-	SUPABASE_HOST := os.Getenv("sp_host")
-	SUPABASE_USER := os.Getenv("sp_user")
-	SUPABASE_PWD := os.Getenv("sp_password")
-	SUPABASE_PORT := os.Getenv("sp_port")
-	SUPABASE_DB := os.Getenv("sp_dbname")
-
-	supabase = &database.Supabase{Host: SUPABASE_HOST, User: SUPABASE_USER, Password: SUPABASE_PWD, Port: SUPABASE_PORT, Dbname: SUPABASE_DB}
-	// supabase.Connect()
-	_, err = supabase.InitPool()
+	// Initialize Supabase client
+	client, err = supabase.NewClient(SUPABASE_URL, SUPABASE_KEY, nil)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Error initializing Supabase client: ", err)
 	}
+	fmt.Println("Supabase client initialized")
 	// end initialize environment variables
-}
-
-func fetch(method, path, payload string) map[string]interface{} {
-	url := os.Getenv("API_BASE_URL") + path
-
-	req, _ := http.NewRequest(method, url, bytes.NewBufferString(payload))
-
-	req.Header.Add("Content-Type", "application/json")
-	req.Header.Add("User-Agent", "ms-stellar-depoprod")
-	///////////////// add token to header /////////////////
-	// authorization := fmt.Sprintf("%s %s", PREFIX_AUTHORIZATION, token)
-	// req.Header.Add("Authorization", authorization)
-
-	res, _ := http.DefaultClient.Do(req)
-
-	body, err := ioutil.ReadAll(res.Body)
-	if err != nil {
-		log.Fatal(err)
-	}
-	err = res.Body.Close()
-	if err != nil {
-		log.Fatal(err)
-	}
-	var jsonResponse map[string]interface{}
-	json.Unmarshal(body, &jsonResponse)
-	return jsonResponse
 }
 
 func convertToWebp(sku string) {
@@ -178,52 +141,76 @@ func preparePayload(product model.Product) (*bytes.Buffer, string) {
 	return &b, writer.FormDataContentType()
 }
 
-func uploadImage(image *bytes.Buffer, wHeader string) interface{} {
-	req, err := http.NewRequest(http.MethodPost, API_BASE_URL+ENDPOINT_MEDIA, image)
+// func uploadImage(image *bytes.Buffer, wHeader string) interface{} {
+// 	req, err := http.NewRequest(http.MethodPost, API_BASE_URL+ENDPOINT_MEDIA, image)
+// 	if err != nil {
+// 		fmt.Println("Error creating request: ", err)
+// 	}
+
+// 	req.Header.Add("User-Agent", "ms-product-image")
+// 	req.Header.Add("Content-Type", wHeader)
+// 	// req.Header.Add("Authorization", fmt.Sprintf("%s %s", "Bearer", TOKEN))
+
+// 	client := &http.Client{}
+// 	resp, err := client.Do(req)
+// 	if err != nil {
+// 		fmt.Println("Error sending request: ", err)
+// 		return nil
+// 	}
+// 	defer resp.Body.Close()
+
+// 	// read response
+// 	body, err := ioutil.ReadAll(resp.Body)
+// 	if err != nil {
+// 		fmt.Println("Error reading response: ", err)
+// 		return nil
+// 	}
+// 	var data interface{}
+// 	err = json.Unmarshal(body, &data)
+// 	if err != nil {
+// 		fmt.Println("Error unmarshalling response: ", err)
+// 		return nil
+// 	}
+
+// 	if resp.StatusCode != 200 && resp.StatusCode != 201 {
+// 		fmt.Println("Error uploading image: ", data.(map[string]interface{})["message"])
+// 		return nil
+// 	}
+
+// 	fmt.Println(data)
+// 	return data.(map[string]interface{})["data"]
+// }
+
+func uploadToBucket(filename string, data []byte) error {
+	bucketPath := fmt.Sprintf("/products/assets/webp/%s", filename)
+	errorMessage, err := client.Storage.UploadFile("media", bucketPath, bytes.NewReader(data))
 	if err != nil {
-		fmt.Println("Error creating request: ", err)
+		fmt.Printf("Error uploading file to bucket: %s, %s\n", errorMessage, err)
+		return err
 	}
-
-	req.Header.Add("User-Agent", "ms-product-image")
-	req.Header.Add("Content-Type", wHeader)
-	req.Header.Add("Authorization", fmt.Sprintf("%s %s", PREFIX_AUTHORIZATION, TOKEN))
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		fmt.Println("Error sending request: ", err)
-		return nil
-	}
-	defer resp.Body.Close()
-
-	// read response
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		fmt.Println("Error reading response: ", err)
-		return nil
-	}
-	var data interface{}
-	err = json.Unmarshal(body, &data)
-	if err != nil {
-		fmt.Println("Error unmarshalling response: ", err)
-		return nil
-	}
-
-	if resp.StatusCode != 200 && resp.StatusCode != 201 {
-		fmt.Println("Error uploading image: ", data.(map[string]interface{})["message"])
-		return nil
-	}
-
-	fmt.Println(data)
-	return data.(map[string]interface{})["data"]
+	fmt.Printf("File uploaded successfully to bucket: %s\n", bucketPath)
+	return nil
 }
 
 func main() {
-	defer supabase.Close()
+	sb = &database.Supabase{
+		Host:     "localhost",
+		User:     "postgres",
+		Password: "postgres",
+		Port:     "5432",
+		Dbname:   "ecommerce",
+	}
 
+	sb.Open(client)
+
+	// d, i, e := client.From("product").Select("*", "", false).Execute()
+	// if e != nil {
+	// 	fmt.Println(e)
+	// }
+	// fmt.Println(i, d)
 	// Read All Products
 	// supabase
-	products, err := supabase.GetProducts()
+	products, err := sb.GetProducts()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -234,23 +221,24 @@ func main() {
 		}
 
 		// logic
-		media := supabase.GetMedia(product.Sku)
+		media := sb.GetMedia(product.Sku)
 
 		if media.MediaID == 0 {
 			// convert to webp
 			convertToWebp(product.Sku)
 
 			// buffer
-			payload, wHeader := preparePayload(product)
+			payload, _ := preparePayload(product)
 			if payload == nil {
 				continue
 			}
 
-			image := uploadImage(payload, wHeader)
-			if image == nil {
+			// Upload to bucket
+			err := uploadToBucket(product.Sku+".webp", payload.Bytes())
+			if err != nil {
 				continue
 			}
-			fmt.Println(product.Sku, image.([]interface{})[0].(map[string]interface{})["image_id"].(uint))
+			fmt.Printf("Uploaded %s to bucket successfully\n", product.Sku)
 
 			// sintax update product here
 		} else {
