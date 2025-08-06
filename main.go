@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"image/jpeg"
 	"io"
@@ -10,17 +11,20 @@ import (
 	"mime/multipart"
 	"os"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/chai2010/webp"
 	"github.com/d34ckgler/sync-product-image/database"
 	"github.com/d34ckgler/sync-product-image/model"
 	"github.com/joho/godotenv"
+	storage_go "github.com/supabase-community/storage-go"
 	"github.com/supabase-community/supabase-go"
 )
 
 var sb *database.Supabase
 var client *supabase.Client
-var SUPABASE_URL, SUPABASE_KEY, API_BASE_URL, ENDPOINT_MEDIA, WATCH_FILE_PATH, OUTPUT_FILE_PATH string
+var SUPABASE_URL, SUPABASE_KEY, SUPABASE_PUBLIC_MEDIA_URL, API_BASE_URL, ENDPOINT_MEDIA, WATCH_FILE_PATH, OUTPUT_FILE_PATH string
 var err error
 
 func init() {
@@ -36,6 +40,7 @@ func init() {
 	ENDPOINT_MEDIA = os.Getenv("ENDPOINT_MEDIA")
 	WATCH_FILE_PATH = os.Getenv("WATCH_FILE_PATH")
 	OUTPUT_FILE_PATH = os.Getenv("OUTPUT_FILE_PATH")
+	SUPABASE_PUBLIC_MEDIA_URL = os.Getenv("SUPABASE_PUBLIC_MEDIA_URL")
 	// TOKEN = os.Getenv("TOKEN")
 
 	// Initialize Supabase client
@@ -47,14 +52,14 @@ func init() {
 	// end initialize environment variables
 }
 
-func convertToWebp(sku string) {
+func convertToWebp(sku string) ([]byte, error) {
 	// convert
 	var buf bytes.Buffer
 
 	file, err := os.Open(WATCH_FILE_PATH + "/" + sku + ".jpg")
 	if err != nil {
 		fmt.Println(err)
-		return
+		return nil, err
 	}
 	defer file.Close()
 
@@ -62,22 +67,23 @@ func convertToWebp(sku string) {
 	img, err := jpeg.Decode(file)
 	if err != nil {
 		fmt.Println(err)
-		return
+		return nil, err
 	}
 
 	// Convert the image to WebP format
 	err = webp.Encode(&buf, img, &webp.Options{Quality: 80})
 	if err != nil {
 		fmt.Println(err)
-		return
+		return nil, err
 	}
 
 	// Save the WebP image to a file
 	err = ioutil.WriteFile(OUTPUT_FILE_PATH+"/"+sku+".webp", buf.Bytes(), 0644)
 	if err != nil {
 		fmt.Println(err)
-		return
+		return nil, err
 	}
+	return buf.Bytes(), nil
 }
 
 func preparePayload(product model.Product) (*bytes.Buffer, string) {
@@ -183,7 +189,11 @@ func preparePayload(product model.Product) (*bytes.Buffer, string) {
 
 func uploadToBucket(filename string, data []byte) error {
 	bucketPath := fmt.Sprintf("/products/assets/webp/%s", filename)
-	errorMessage, err := client.Storage.UploadFile("media", bucketPath, bytes.NewReader(data))
+	mimeType := "image/webp" // Especificar el tipo MIME correcto
+
+	errorMessage, err := client.Storage.UploadFile("media", bucketPath, bytes.NewReader(data), storage_go.FileOptions{
+		ContentType: &mimeType,
+	})
 	if err != nil {
 		fmt.Printf("Error uploading file to bucket: %s, %s\n", errorMessage, err)
 		return err
@@ -225,22 +235,55 @@ func main() {
 
 		if media.MediaID == 0 {
 			// convert to webp
-			convertToWebp(product.Sku)
-
-			// buffer
-			payload, _ := preparePayload(product)
-			if payload == nil {
-				continue
+			buf, err := convertToWebp(product.Sku)
+			if err != nil {
+				fmt.Println(err)
 			}
 
+			// buffer
+			// payload, _ := preparePayload(product)
+			// if payload == nil {
+			// 	continue
+			// }
+
 			// Upload to bucket
-			err := uploadToBucket(product.Sku+".webp", payload.Bytes())
+			err = uploadToBucket(product.Sku+".webp", buf)
 			if err != nil {
 				continue
 			}
 			fmt.Printf("Uploaded %s to bucket successfully\n", product.Sku)
 
 			// sintax update product here
+			payload := map[string]interface{}{
+				"mime_type":  "webp",
+				"url":        fmt.Sprintf("%s/%s.webp", SUPABASE_PUBLIC_MEDIA_URL, product.Sku),
+				"alt":        product.Name,
+				"slug":       product.Sku,
+				"is_active":  true,
+				"created_at": strings.Split(time.Now().UTC().String(), " +")[0],
+				"created_by": 1,
+			}
+			inserted, _, err := sb.Client.From("media").Insert(payload, false, "", "", "").Execute()
+			if err != nil {
+				fmt.Println(err)
+			}
+			newMedia := []model.Media{}
+			err = json.Unmarshal(inserted, &newMedia)
+			if err != nil {
+				fmt.Println(err)
+			}
+
+			// update product
+			payload = map[string]interface{}{
+				"image_id": newMedia[0].MediaID,
+			}
+			_, _, err = sb.Client.From("product").Update(payload, "", "").Eq("product_id", fmt.Sprintf("%d", product.ProductID)).Execute()
+			if err != nil {
+				fmt.Println(err)
+			}
+
+			fmt.Printf("Updated %s to product successfully\n", product.Sku)
+
 		} else {
 			fmt.Println(product.Sku, "exist")
 			continue
