@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"image/jpeg"
+	"image/png"
 	"io"
 	"io/ioutil"
 	"log"
@@ -56,7 +56,7 @@ func convertToWebp(sku string) ([]byte, error) {
 	// convert
 	var buf bytes.Buffer
 
-	file, err := os.Open(WATCH_FILE_PATH + "/" + sku + ".jpg")
+	file, err := os.Open(WATCH_FILE_PATH + "/" + sku + ".png")
 	if err != nil {
 		fmt.Println(err)
 		return nil, err
@@ -64,7 +64,7 @@ func convertToWebp(sku string) ([]byte, error) {
 	defer file.Close()
 
 	// Decode the JPG image
-	img, err := jpeg.Decode(file)
+	img, err := png.Decode(file)
 	if err != nil {
 		fmt.Println(err)
 		return nil, err
@@ -238,6 +238,7 @@ func main() {
 			buf, err := convertToWebp(product.Sku)
 			if err != nil {
 				fmt.Println(err)
+				continue
 			}
 
 			// buffer
@@ -251,7 +252,6 @@ func main() {
 			if err != nil {
 				continue
 			}
-			fmt.Printf("Uploaded %s to bucket successfully\n", product.Sku)
 
 			// sintax update product here
 			payload := map[string]interface{}{
@@ -285,7 +285,7 @@ func main() {
 			fmt.Printf("Updated %s to product successfully\n", product.Sku)
 
 		} else {
-			fmt.Println(product.Sku, "exist")
+			// fmt.Println(product.Sku, "exist")
 			continue
 		}
 
