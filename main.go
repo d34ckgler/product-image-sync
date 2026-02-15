@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/jpeg"
 	"image/png"
 	"io"
 	"io/ioutil"
@@ -55,16 +57,28 @@ func init() {
 func convertToWebp(sku string) ([]byte, error) {
 	// convert
 	var buf bytes.Buffer
+	isJPG := false
 
 	file, err := os.Open(WATCH_FILE_PATH + "/" + sku + ".png")
 	if err != nil {
-		fmt.Println(err)
-		return nil, err
+		fmt.Println("Error opening file: ", err)
+		// return nil, err
+		isJPG = true
+		file, err = os.Open(WATCH_FILE_PATH + "/" + sku + ".jpg")
+		if err != nil {
+			fmt.Println("Error opening file: ", err)
+			return nil, err
+		}
 	}
 	defer file.Close()
 
 	// Decode the JPG image
-	img, err := png.Decode(file)
+	var img image.Image
+	if isJPG {
+		img, err = jpeg.Decode(file)
+	} else {
+		img, err = png.Decode(file)
+	}
 	if err != nil {
 		fmt.Println(err)
 		return nil, err
@@ -226,9 +240,9 @@ func main() {
 	}
 
 	for _, product := range products {
-		if err != nil {
-			fmt.Println(err)
-		}
+		// if err != nil {
+		// 	fmt.Println(err)
+		// }
 
 		// logic
 		media := sb.GetMedia(product.Sku)
@@ -275,7 +289,9 @@ func main() {
 
 			// update product
 			payload = map[string]interface{}{
-				"image_id": newMedia[0].MediaID,
+				"image_id":   newMedia[0].MediaID,
+				"updated_at": strings.Split(time.Now().UTC().String(), " +")[0],
+				"updated_by": 1,
 			}
 			_, _, err = sb.Client.From("product").Update(payload, "", "").Eq("product_id", fmt.Sprintf("%d", product.ProductID)).Execute()
 			if err != nil {

@@ -96,6 +96,7 @@ func (ecm *Supabase) GetProducts() (products []model.Product, err error) {
 		var tempProducs []model.Product
 		data, _, err := ecm.Client.From("product").
 			Select("*", "", false).
+			// Is("image_id", "null").
 			Range(offset, offset+1000-1, "").
 			Execute()
 		if err != nil {
