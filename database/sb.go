@@ -39,20 +39,10 @@ func (ecm *Supabase) Open(client *supabase.Client) {
 }
 
 func (ecm *Supabase) InitPool() (*gorm.DB, error) {
-	// dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=disable TimeZone=America/Caracas application_name=ecommerce", ecm.Host, ecm.User, ecm.Password, ecm.Dbname, ecm.Port)
-	// dsn := "postgresql://postgres.gpacszhbwbrdjyyxlzdr:6Dv0YvCiGBJmNYT3@aws-0-us-west-1.pooler.supabase.com:5432/postgres"
-
-	dsn := "postgresql://postgres.bmjqebmyyeybsyzwirkd:6Dv0YvCiGBJmNYT3@aws-0-us-east-1.pooler.supabase.com:5432/postgres"
-	// dsn := "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
-
-	// sqlDB, err := sql.Open("pgx", dsn)
-	// if err != nil {
-	// 	return nil, fmt.Errorf("failed to create connection pool: %v", err)
-	// }
-
-	// sqlDB.SetMaxIdleConns(10)
-	// sqlDB.SetMaxOpenConns(100)
-	// sqlDB.SetConnMaxLifetime(30)
+	dsn := fmt.Sprintf(
+		"host=%s user=%s password=%s dbname=%s port=%s sslmode=require TimeZone=America/Caracas",
+		ecm.Host, ecm.User, ecm.Password, ecm.Dbname, ecm.Port,
+	)
 
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
 		Logger: nil,

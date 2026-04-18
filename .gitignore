@@ -1,1 +1,15 @@
+# Assets
 /assets
+/sincronizador
+sincronizador.zip
+
+# Environment (NEVER commit credentials)
+.env
+
+# Compiled binaries
+sync-product-image
+sync-product-image.exe
+
+# Data files
+*.csv
+.marscode

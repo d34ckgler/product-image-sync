@@ -2,18 +2,16 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"image"
 	"image/jpeg"
 	"image/png"
 	"io"
-	"io/ioutil"
 	"log"
-	"mime/multipart"
 	"os"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/chai2010/webp"
@@ -54,19 +52,60 @@ func init() {
 	// end initialize environment variables
 }
 
-func convertToWebp(sku string) ([]byte, error) {
+// calculateChecksum calcula el SHA256 de los bytes proporcionados
+func calculateChecksum(data []byte) string {
+	hash := sha256.Sum256(data)
+	return hex.EncodeToString(hash[:])
+}
+
+// findSourceFile busca la imagen fuente (PNG o JPG) y retorna su path y contenido
+func findSourceFile(sku string) (string, bool) {
+	// Intentar PNG primero
+	pngPath := WATCH_FILE_PATH + "/" + sku + ".png"
+	if _, err := os.Stat(pngPath); err == nil {
+		return pngPath, false
+	}
+	// Intentar JPG
+	jpgPath := WATCH_FILE_PATH + "/" + sku + ".jpg"
+	if _, err := os.Stat(jpgPath); err == nil {
+		return jpgPath, true
+	}
+	return "", false
+}
+
+func convertToWebp(sku string, forceReconvert bool) ([]byte, error) {
 	// convert
 	var buf bytes.Buffer
 	isJPG := false
 
+	// Si ya existe la imagen en webp y no se fuerza reconversión, usar caché
+	if !forceReconvert {
+		if _, err := os.Stat(OUTPUT_FILE_PATH + "/" + sku + ".webp"); err == nil {
+			fmt.Printf("[%s]: image already exists in cache\n", sku)
+			file, err := os.Open(OUTPUT_FILE_PATH + "/" + sku + ".webp")
+			if err != nil {
+				return nil, err
+			}
+			defer file.Close()
+			_, err = io.Copy(&buf, file)
+			if err != nil {
+				return nil, err
+			}
+			return buf.Bytes(), nil
+		}
+	} else {
+		// Eliminar caché WebP antiguo si existe
+		os.Remove(OUTPUT_FILE_PATH + "/" + sku + ".webp")
+	}
+
 	file, err := os.Open(WATCH_FILE_PATH + "/" + sku + ".png")
 	if err != nil {
-		fmt.Println("Error opening file: ", err)
+		// fmt.Println("Error opening file: ", err)
 		// return nil, err
 		isJPG = true
 		file, err = os.Open(WATCH_FILE_PATH + "/" + sku + ".jpg")
 		if err != nil {
-			fmt.Println("Error opening file: ", err)
+			// fmt.Println("Error opening file: ", err)
 			return nil, err
 		}
 	}
@@ -80,230 +119,187 @@ func convertToWebp(sku string) ([]byte, error) {
 		img, err = png.Decode(file)
 	}
 	if err != nil {
-		fmt.Println(err)
+		// fmt.Println(err)
 		return nil, err
 	}
 
 	// Convert the image to WebP format
 	err = webp.Encode(&buf, img, &webp.Options{Quality: 80})
 	if err != nil {
-		fmt.Println(err)
+		// fmt.Println(err)
 		return nil, err
 	}
 
 	// Save the WebP image to a file
-	err = ioutil.WriteFile(OUTPUT_FILE_PATH+"/"+sku+".webp", buf.Bytes(), 0644)
+	err = os.WriteFile(OUTPUT_FILE_PATH+"/"+sku+".webp", buf.Bytes(), 0644)
 	if err != nil {
-		fmt.Println(err)
+		// fmt.Println(err)
 		return nil, err
 	}
 	return buf.Bytes(), nil
 }
 
-func preparePayload(product model.Product) (*bytes.Buffer, string) {
-	// create buffer
-	var b bytes.Buffer
-	writer := multipart.NewWriter(&b)
 
-	// Add the file to hold the form
-	file, err := os.Open(OUTPUT_FILE_PATH + "/" + product.Sku + ".webp")
-	if err != nil {
-		fmt.Printf("[%s]: media not exist\n", product.Sku)
-		return nil, ""
-	}
-	defer file.Close()
-
-	part, err := writer.CreateFormFile("file", file.Name())
-	if err != nil {
-		fmt.Println("Error creating form file: ", err)
-		return nil, ""
-	}
-
-	_, err = io.Copy(part, file)
-	if err != nil {
-		fmt.Println("Error copying file: ", err)
-		return nil, ""
-	}
-
-	// Add the other fields
-	err = writer.WriteField("alt", product.Description)
-	if err != nil {
-		fmt.Println("Error writing field: ", err)
-		return nil, ""
-	}
-
-	err = writer.WriteField("slug", product.Sku)
-	if err != nil {
-		fmt.Println("Error writing field: ", err)
-		return nil, ""
-	}
-
-	err = writer.WriteField("table_name", "product")
-	if err != nil {
-		fmt.Println("Error writing field: ", err)
-		return nil, ""
-	}
-
-	productID := strconv.Itoa(int(product.ProductID))
-
-	err = writer.WriteField("column_id", productID)
-	if err != nil {
-		fmt.Println("Error writing field: ", err)
-		return nil, ""
-	}
-
-	err = writer.Close()
-	if err != nil {
-		fmt.Println("Error closing writer: ", err)
-		return nil, ""
-	}
-
-	return &b, writer.FormDataContentType()
-}
-
-// func uploadImage(image *bytes.Buffer, wHeader string) interface{} {
-// 	req, err := http.NewRequest(http.MethodPost, API_BASE_URL+ENDPOINT_MEDIA, image)
-// 	if err != nil {
-// 		fmt.Println("Error creating request: ", err)
-// 	}
-
-// 	req.Header.Add("User-Agent", "ms-product-image")
-// 	req.Header.Add("Content-Type", wHeader)
-// 	// req.Header.Add("Authorization", fmt.Sprintf("%s %s", "Bearer", TOKEN))
-
-// 	client := &http.Client{}
-// 	resp, err := client.Do(req)
-// 	if err != nil {
-// 		fmt.Println("Error sending request: ", err)
-// 		return nil
-// 	}
-// 	defer resp.Body.Close()
-
-// 	// read response
-// 	body, err := ioutil.ReadAll(resp.Body)
-// 	if err != nil {
-// 		fmt.Println("Error reading response: ", err)
-// 		return nil
-// 	}
-// 	var data interface{}
-// 	err = json.Unmarshal(body, &data)
-// 	if err != nil {
-// 		fmt.Println("Error unmarshalling response: ", err)
-// 		return nil
-// 	}
-
-// 	if resp.StatusCode != 200 && resp.StatusCode != 201 {
-// 		fmt.Println("Error uploading image: ", data.(map[string]interface{})["message"])
-// 		return nil
-// 	}
-
-// 	fmt.Println(data)
-// 	return data.(map[string]interface{})["data"]
-// }
-
-func uploadToBucket(filename string, data []byte) error {
+func uploadToBucket(filename string, data []byte, upsert bool) error {
 	bucketPath := fmt.Sprintf("/products/assets/webp/%s", filename)
-	mimeType := "image/webp" // Especificar el tipo MIME correcto
+	mimeType := "image/webp"
 
 	errorMessage, err := client.Storage.UploadFile("media", bucketPath, bytes.NewReader(data), storage_go.FileOptions{
 		ContentType: &mimeType,
+		Upsert:      &upsert,
 	})
 	if err != nil {
 		fmt.Printf("Error uploading file to bucket: %s, %s\n", errorMessage, err)
 		return err
 	}
-	fmt.Printf("File uploaded successfully to bucket: %s\n", bucketPath)
+	action := "uploaded"
+	if upsert {
+		action = "replaced (upsert)"
+	}
+	fmt.Printf("File %s successfully to bucket: %s\n", action, bucketPath)
 	return nil
 }
 
 func main() {
 	sb = &database.Supabase{
-		Host:     "localhost",
-		User:     "postgres",
-		Password: "postgres",
-		Port:     "5432",
-		Dbname:   "ecommerce",
+		Host:     os.Getenv("sp_host"),
+		User:     os.Getenv("sp_user"),
+		Password: os.Getenv("sp_password"),
+		Port:     os.Getenv("sp_port"),
+		Dbname:   os.Getenv("sp_dbname"),
 	}
 
 	sb.Open(client)
 
-	// d, i, e := client.From("product").Select("*", "", false).Execute()
-	// if e != nil {
-	// 	fmt.Println(e)
-	// }
-	// fmt.Println(i, d)
-	// Read All Products
-	// supabase
+	// Read All Products - supabase
 	products, err := sb.GetProducts()
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	for _, product := range products {
-		// if err != nil {
-		// 	fmt.Println(err)
-		// }
+	updated := 0
+	insertedCount := 0
+	skipped := 0
 
-		// logic
+	for _, product := range products {
 		media := sb.GetMedia(product.Sku)
 
+		// Calcular checksum de la imagen fuente (PNG/JPG)
+		sourceChecksum := ""
+		sourceData, sourceErr := os.ReadFile(WATCH_FILE_PATH + "/" + product.Sku + ".png")
+		if sourceErr != nil {
+			sourceData, sourceErr = os.ReadFile(WATCH_FILE_PATH + "/" + product.Sku + ".jpg")
+		}
+		if sourceErr != nil {
+			// No existe imagen fuente para este SKU
+			continue
+		}
+		sourceChecksum = calculateChecksum(sourceData)
+
 		if media.MediaID == 0 {
-			// convert to webp
-			buf, err := convertToWebp(product.Sku)
-			if err != nil {
-				fmt.Println(err)
-				continue
-			}
-
-			// buffer
-			// payload, _ := preparePayload(product)
-			// if payload == nil {
-			// 	continue
-			// }
-
-			// Upload to bucket
-			err = uploadToBucket(product.Sku+".webp", buf)
+			// ===== CASO 1: Media NO existe → crear nueva =====
+			buf, err := convertToWebp(product.Sku, false)
 			if err != nil {
 				continue
 			}
 
-			// sintax update product here
+			err = uploadToBucket(product.Sku+".webp", buf, false)
+			if err != nil {
+				continue
+			}
+
 			payload := map[string]interface{}{
 				"mime_type":  "webp",
 				"url":        fmt.Sprintf("%s/%s.webp", SUPABASE_PUBLIC_MEDIA_URL, product.Sku),
 				"alt":        product.Name,
 				"slug":       product.Sku,
+				"check_sum":  sourceChecksum,
 				"is_active":  true,
-				"created_at": strings.Split(time.Now().UTC().String(), " +")[0],
+				"created_at": time.Now().UTC().Format(time.RFC3339),
 				"created_by": 1,
 			}
-			inserted, _, err := sb.Client.From("media").Insert(payload, false, "", "", "").Execute()
+			insertedData, _, err := sb.Client.From("media").Insert(payload, false, "", "", "").Execute()
 			if err != nil {
-				fmt.Println(err)
-			}
-			newMedia := []model.Media{}
-			err = json.Unmarshal(inserted, &newMedia)
-			if err != nil {
-				fmt.Println(err)
+				fmt.Printf("[%s] Error inserting media: %v\n", product.Sku, err)
+				continue
 			}
 
-			// update product
-			payload = map[string]interface{}{
+			newMedia := []model.Media{}
+			err = json.Unmarshal(insertedData, &newMedia)
+			if err != nil {
+				fmt.Printf("[%s] Error unmarshalling media: %v\n", product.Sku, err)
+				continue
+			}
+
+			// Vincular media al producto
+			updatePayload := map[string]interface{}{
 				"image_id":   newMedia[0].MediaID,
-				"updated_at": strings.Split(time.Now().UTC().String(), " +")[0],
+				"updated_at": time.Now().UTC().Format(time.RFC3339),
 				"updated_by": 1,
 			}
-			_, _, err = sb.Client.From("product").Update(payload, "", "").Eq("product_id", fmt.Sprintf("%d", product.ProductID)).Execute()
+			_, _, err = sb.Client.From("product").Update(updatePayload, "", "").Eq("product_id", fmt.Sprintf("%d", product.ProductID)).Execute()
 			if err != nil {
-				fmt.Println(err)
+				fmt.Printf("[%s] Error updating product: %v\n", product.Sku, err)
 			}
 
-			fmt.Printf("Updated %s to product successfully\n", product.Sku)
+			fmt.Printf("[%s] ✅ New image uploaded and linked (checksum: %s)\n", product.Sku, sourceChecksum[:12])
+			insertedCount++
+
+		} else if media.CheckSum == "" {
+			// ===== CASO 2: Media existe pero check_sum vacío (migración) → solo guardar checksum =====
+			updatePayload := map[string]interface{}{
+				"check_sum":  sourceChecksum,
+				"updated_at": time.Now().UTC().Format(time.RFC3339),
+				"updated_by": 1,
+			}
+			_, _, err := sb.Client.From("media").Update(updatePayload, "", "").Eq("media_id", fmt.Sprintf("%d", media.MediaID)).Execute()
+			if err != nil {
+				fmt.Printf("[%s] Error updating checksum: %v\n", product.Sku, err)
+				continue
+			}
+
+			fmt.Printf("[%s] 📝 Checksum populated (migration): %s\n", product.Sku, sourceChecksum[:12])
+			updated++
+
+		} else if media.CheckSum != sourceChecksum {
+			// ===== CASO 3: Media existe y checksum diferente → imagen cambió, re-subir =====
+			fmt.Printf("[%s] 🔄 Checksum changed (stored: %s → new: %s)\n", product.Sku, media.CheckSum[:min(12, len(media.CheckSum))], sourceChecksum[:12])
+
+			// Forzar reconversión (elimina caché WebP antiguo)
+			buf, err := convertToWebp(product.Sku, true)
+			if err != nil {
+				fmt.Printf("[%s] Error converting image: %v\n", product.Sku, err)
+				continue
+			}
+
+			// Subir nueva imagen con upsert (reemplaza la existente directamente)
+			err = uploadToBucket(product.Sku+".webp", buf, true)
+			if err != nil {
+				continue
+			}
+
+			// Actualizar registro media con nuevo checksum
+			updatePayload := map[string]interface{}{
+				"check_sum":  sourceChecksum,
+				"updated_at": time.Now().UTC().Format(time.RFC3339),
+				"updated_by": 1,
+			}
+			_, _, err = sb.Client.From("media").Update(updatePayload, "", "").Eq("media_id", fmt.Sprintf("%d", media.MediaID)).Execute()
+			if err != nil {
+				fmt.Printf("[%s] Error updating media: %v\n", product.Sku, err)
+				continue
+			}
+
+			fmt.Printf("[%s] ✅ Image deleted and re-uploaded successfully\n", product.Sku)
+			updated++
 
 		} else {
-			// fmt.Println(product.Sku, "exist")
-			continue
+			// ===== CASO 4: Checksum igual → sin cambios =====
+			skipped++
 		}
-
 	}
+
+	fmt.Printf("\n📊 Summary: %d new, %d updated, %d skipped (total: %d)\n", insertedCount, updated, skipped, len(products))
+
+	fmt.Println("All products updated successfully")
 }
